@@ -76,10 +76,7 @@ pub struct Notification {
     /// See `Notification::actions()` and `Notification::action()`
     pub actions: Vec<String>,
 
-    #[cfg(target_os = "macos")]
-    pub(crate) sound_name: Option<String>,
-
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) sound_name: Option<String>,
 
     #[cfg(target_os = "windows")]
@@ -109,16 +106,22 @@ impl Notification {
     }
 
     /// This is for testing purposes only and will not work with actual implementations.
-    #[cfg(all(unix, not(target_os = "macos")))]
     #[doc(hidden)]
     #[deprecated(note = "this is a test only feature")]
     pub fn at_bus(sub_bus: &str) -> Notification {
-        let bus = xdg::NotificationBus::custom(sub_bus)
-            .ok_or("invalid subpath")
-            .unwrap();
-        Notification {
-            bus,
-            ..Notification::default()
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let bus = xdg::NotificationBus::custom(sub_bus)
+                .ok_or("invalid subpath")
+                .unwrap();
+            Notification {
+                bus,
+                ..Notification::default()
+            }
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        {
+            Notification::default()
         }
     }
 
@@ -148,7 +151,7 @@ impl Notification {
     }
 
     /// Manual wrapper for `Hint::ImageData`
-    #[cfg(all(feature = "images", unix, not(target_os = "macos")))]
+    #[cfg(feature = "images")]
     pub fn image_data(&mut self, image: Image) -> &mut Notification {
         self.hint(Hint::ImageData(image));
         self
@@ -157,7 +160,10 @@ impl Notification {
     /// Wrapper for `Hint::ImagePath`
     #[cfg(all(unix, not(target_os = "macos")))]
     pub fn image_path(&mut self, path: &str) -> &mut Notification {
-        self.hint(Hint::ImagePath(path.to_string()));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            self.hint(Hint::ImagePath(path.to_string()));
+        }
         self
     }
 
@@ -168,21 +174,38 @@ impl Notification {
         self
     }
 
+    /// No-op method for compatibility
+    #[cfg(target_os = "macos")]
+    pub fn image_path(&mut self, path: &str) -> &mut Notification {
+        self
+    }
+
     /// app's System.AppUserModel.ID
-    #[cfg(target_os = "windows")]
+    ///
+    /// # Platform Support
+    /// Windows only. No-op on other platforms.
     pub fn app_id(&mut self, app_id: &str) -> &mut Notification {
-        self.app_id = Some(app_id.to_string());
+        #[cfg(target_os = "windows")]
+        {
+            self.app_id = Some(app_id.to_string());
+        }
         self
     }
 
     /// Wrapper for `Hint::ImageData`
-    #[cfg(all(feature = "images", unix, not(target_os = "macos")))]
+    ///
+    /// # Platform Support
+    /// This method only works on Unix systems (excluding macOS). On other platforms, it's a no-op.
+    #[cfg(feature = "images")]
     pub fn image<T: AsRef<std::path::Path> + Sized>(
         &mut self,
         path: T,
     ) -> Result<&mut Notification> {
-        let img = Image::open(&path)?;
-        self.hint(Hint::ImageData(img));
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let img = Image::open(&path)?;
+            self.hint(Hint::ImageData(img));
+        }
         Ok(self)
     }
 
@@ -261,8 +284,8 @@ impl Notification {
     ///
     /// # Platform support
     /// Most of these hints don't even have an effect on the big XDG Desktops, they are completely tossed on macOS.
-    #[cfg(all(unix, not(target_os = "macos")))]
     pub fn hint(&mut self, hint: Hint) -> &mut Notification {
+        #[cfg(all(feature = "images", unix, not(target_os = "macos")))]
         match hint {
             Hint::CustomInt(k, v) => {
                 self.hints_unique
@@ -329,10 +352,12 @@ impl Notification {
     ///
     /// # Platform support
     /// Most Desktops on linux and bsd are far too relaxed to pay any attention to this.
-    /// In macOS this does not exist
-    #[cfg(all(unix, not(target_os = "macos")))]
+    /// This method is a no-op on macOS and Windows.
     pub fn urgency(&mut self, urgency: Urgency) -> &mut Notification {
-        self.hint(Hint::Urgency(urgency)); // TODO impl as T where T: Into<Urgency>
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            self.hint(Hint::Urgency(urgency));
+        }
         self
     }
 
@@ -387,12 +412,24 @@ impl Notification {
     /// Schedules a Notification
     ///
     /// Sends a Notification at the specified date.
-    #[cfg(all(target_os = "macos", feature = "chrono"))]
+    ///
+    /// # Platform support
+    /// macOS only. Returns an error on other platforms.
+    #[cfg(feature = "chrono")]
     pub fn schedule<T: chrono::TimeZone>(
         &self,
         delivery_date: chrono::DateTime<T>,
     ) -> Result<macos::NotificationHandle> {
-        macos::schedule_notification(self, delivery_date.timestamp() as f64)
+        #[cfg(target_os = "macos")]
+        {
+            macos::schedule_notification(self, delivery_date.timestamp() as f64)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err(Error::PlatformUnsupported(
+                "Scheduled notifications are only supported on macOS".into(),
+            ))
+        }
     }
 
     /// Schedules a Notification
@@ -400,9 +437,20 @@ impl Notification {
     /// Sends a Notification at the specified timestamp.
     /// This is a raw `f64`, if that is a bit too raw for you please activate the feature `"chrono"`,
     /// then you can use `Notification::schedule()` instead, which accepts a `chrono::DateTime<T>`.
-    #[cfg(target_os = "macos")]
+    ///
+    /// # Platform support
+    /// macOS only. Returns an error on other platforms.
     pub fn schedule_raw(&self, timestamp: f64) -> Result<macos::NotificationHandle> {
-        macos::schedule_notification(self, timestamp)
+        #[cfg(target_os = "macos")]
+        {
+            macos::schedule_notification(self, timestamp)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Err(Error::from(ErrorKind::PlatformUnsupported(
+                "Scheduled notifications are only supported on macOS".into(),
+            )))
+        }
     }
 
     /// Sends Notification to D-Bus.
@@ -452,7 +500,9 @@ impl Notification {
     }
 
     /// Wraps [`Notification::show()`] but prints notification to stdout.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    ///
+    /// # Platform support
+    /// Only supported on XDG desktops. This method is a no-op on macOS and Windows.
     #[deprecated = "this was never meant to be public API"]
     pub fn show_debug(&mut self) -> Result<xdg::NotificationHandle> {
         println!(

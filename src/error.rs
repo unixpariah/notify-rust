@@ -41,6 +41,8 @@ pub enum ErrorKind {
     Image(ImageError),
 
     ImplementationMissing,
+
+    PlatformUnsupported(String),
 }
 
 impl fmt::Display for Error {
@@ -64,6 +66,7 @@ impl fmt::Display for Error {
                 f,
                 r#"No Dbus implementation available, please compile with either feature ="z" or feature="d""#
             ),
+            ErrorKind::PlatformUnsupported(ref e) => write!(f, "{}", e),
         }
     }
 }
